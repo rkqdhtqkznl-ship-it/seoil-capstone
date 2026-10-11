@@ -1,6 +1,4 @@
-# 용량이 크거나 올리지 말아야 할 파일 목록
 node_modules/
-.env
 build/
-dist/
-*.log
+.env
+.DS_Store
