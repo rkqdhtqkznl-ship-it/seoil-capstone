@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import './App.css';
 
 const INITIAL_POINTS = [
@@ -30,49 +28,112 @@ function loadReports() {
 function MapView({ points, onSelect, selectedId, centerRequest }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
+  const overlaysRef = useRef([]);
+  const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState('');
 
+  // 1) SDK 로드 + 지도 생성
   useEffect(() => {
-    if (!mapElement.current || mapRef.current) return undefined;
-    try {
-      const map = L.map(mapElement.current, { zoomControl: false }).setView([37.5953, 127.0873], 14);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors', maxZoom: 19,
-      }).addTo(map);
-      L.control.zoom({ position: 'topright' }).addTo(map);
-      mapRef.current = map;
-      setTimeout(() => map.invalidateSize(), 150);
-    } catch (error) {
-      setMapError('지도를 초기화하지 못했어요. 페이지를 새로고침해 주세요.');
+    let cancelled = false;
+    const key = process.env.REACT_APP_KAKAO_MAP_KEY?.trim();
+
+    if (!key) {
+      setMapError('카카오 JavaScript 키가 설정되지 않았어요. client/.env 파일에 REACT_APP_KAKAO_MAP_KEY=키값 을 입력한 뒤 개발 서버를 다시 실행해 주세요.');
+      return () => { cancelled = true; };
     }
+
+    const createMap = () => {
+      if (cancelled || !mapElement.current || mapRef.current) return;
+      try {
+        const kakao = window.kakao;
+        const map = new kakao.maps.Map(mapElement.current, {
+          center: new kakao.maps.LatLng(37.5953, 127.0873),
+          level: 5,
+        });
+        map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+        mapRef.current = map;
+        setMapError('');
+        setMapReady(true); // 마커 effect를 지도 생성 이후에 다시 실행시키는 신호
+      } catch (error) {
+        console.error('카카오 지도 생성 오류:', error);
+        setMapError('지도를 생성하지 못했어요. 카카오 디벨로퍼스에서 JavaScript SDK 도메인(http://localhost:3000)과 카카오맵 활성화 여부를 확인해 주세요.');
+      }
+    };
+
+    const onLoad = () => {
+      if (cancelled || !window.kakao?.maps) return;
+      window.kakao.maps.load(createMap); // autoload=false 이므로 load() 콜백 안에서 지도 생성
+    };
+    const onError = () => {
+      if (!cancelled) setMapError('카카오 지도 SDK 요청에 실패했어요. JavaScript 키, 웹 도메인 등록, 네트워크 연결을 확인해 주세요.');
+    };
+
+    let script = document.querySelector('script[data-kakao-map-sdk]');
+    if (window.kakao?.maps?.load) {
+      onLoad();
+    } else {
+      if (!script) {
+        script = document.createElement('script');
+        script.dataset.kakaoMapSdk = 'true';
+        script.async = true;
+        script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`;
+        document.head.appendChild(script);
+      }
+      script.addEventListener('load', onLoad);
+      script.addEventListener('error', onError);
+    }
+
     return () => {
-      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+      cancelled = true;
+      if (script) {
+        script.removeEventListener('load', onLoad);
+        script.removeEventListener('error', onError);
+      }
+      overlaysRef.current.forEach(overlay => overlay.setMap(null));
+      overlaysRef.current = [];
+      mapRef.current = null;
+      setMapReady(false);
     };
   }, []);
 
+  // 2) "중랑구 중심" 버튼
   useEffect(() => {
     const map = mapRef.current;
-    if (map && centerRequest > 0) map.flyTo([37.5953, 127.0873], 14, { duration: 0.6 });
-  }, [centerRequest]);
+    const kakao = window.kakao;
+    if (!mapReady || !map || !kakao?.maps) return;
+    if (centerRequest > 0) {
+      map.panTo(new kakao.maps.LatLng(37.5953, 127.0873));
+      map.setLevel(5);
+    }
+  }, [centerRequest, mapReady]);
 
+  // 3) 마커(커스텀 오버레이) 표시 - 지도가 준비된 뒤에 실행
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-    markersRef.current.forEach(marker => marker.remove());
-    markersRef.current = points.map(point => {
+    const kakao = window.kakao;
+    if (!mapReady || !map || !kakao?.maps) return;
+    overlaysRef.current.forEach(overlay => overlay.setMap(null));
+    overlaysRef.current = points.map(point => {
       const style = TYPES[point.type] || TYPES.report;
-      const marker = L.circleMarker([point.lat, point.lng], {
-        radius: selectedId === point.id ? 12 : 9,
-        color: '#ffffff', weight: 3, fillColor: style.color, fillOpacity: 0.98,
-      }).addTo(map);
-      marker.bindTooltip(`${style.icon} ${point.title}`, { direction: 'top', offset: [0, -8] });
-      marker.on('click', () => onSelect(point));
-      return marker;
+      const content = document.createElement('div');
+      content.style.cssText = `background:${style.color};color:white;border:2px solid white;border-radius:18px;padding:5px 8px;font-size:15px;box-shadow:0 2px 7px #19355e40;white-space:nowrap;cursor:pointer;`;
+      content.textContent = style.icon;
+      content.title = point.title;
+      content.addEventListener('click', () => onSelect(point));
+      return new kakao.maps.CustomOverlay({
+        map,
+        position: new kakao.maps.LatLng(point.lat, point.lng),
+        content,
+        yAnchor: 1.25,
+        zIndex: selectedId === point.id ? 10 : 1,
+      });
     });
-  }, [points, onSelect, selectedId]);
+    return () => {
+      overlaysRef.current.forEach(overlay => overlay.setMap(null));
+    };
+  }, [points, onSelect, selectedId, mapReady]);
 
-  return <div className="map-wrap"><div className="map-canvas" ref={mapElement} />{mapError && <div className="map-error">{mapError}</div>}<div className="map-stamp">중랑구 통학로 안전 지도 <span>· 예시 위치 포함</span></div></div>;
+  return <div className="map-wrap"><div className="map-canvas" ref={mapElement} />{mapError && <div className="map-error">{mapError}</div>}<div className="map-stamp">카카오맵 <span>· 안전정보 위치는 예시 데이터</span></div></div>;
 }
 
 function App() {
@@ -105,7 +166,11 @@ function App() {
     setReportText(''); setReportPlace(''); setNotice('제보가 이 브라우저에 저장됐어요. 지도에서 보라색 표시를 확인하세요.');
     setSelected(newReport); setPage('map');
   };
-
+  const deleteReport = id => {
+    setReports(prev => prev.filter(r => r.id !== id));
+    setSelected(null);
+    setNotice('제보를 삭제했어요.');
+  };
   const navItems = [
     { id: 'map', icon: '⌖', label: '지도 보기' },
     { id: 'list', icon: '☷', label: '위험정보 목록' },
@@ -131,7 +196,7 @@ function App() {
 
       <main className="main-content">
         {page === 'map' && <>
-          <section className="page-heading"><div><div className="eyebrow">JUNGNANG-GU · SAFETY MAP</div><h1>우리 동네 통학로 지도</h1><p>학교 주변의 위험 요소와 안전 시설을 한눈에 확인하세요.</p></div><div className="updated-pill"><span>●</span> 지도 서비스 준비 완료</div></section>
+          <section className="page-heading"><div><div className="eyebrow">JUNGNANG-GU · SAFETY MAP</div><h1>우리 동네 통학로 지도</h1><p>학교 주변의 위험 요소와 안전 시설을 한눈에 확인하세요.</p></div><div className="updated-pill"><span>●</span> 카카오 지도 API 연동</div></section>
           <div className="stats-grid">
             <Stat icon="🏫" label="스쿨존" value={allPoints.filter(p => p.type === 'school').length} unit="곳" color="pink" />
             <Stat icon="🚗" label="주정차 주의" value={allPoints.filter(p => p.type === 'parking').length} unit="곳" color="orange" />
@@ -142,9 +207,11 @@ function App() {
             <div className="map-toolbar"><div className="searchbox"><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="학교명 또는 위험정보 검색" aria-label="지도 검색" />{query && <button onClick={() => setQuery('')} aria-label="검색 지우기">×</button>}</div><button className="locate-button" onClick={() => { setCenterRequest(value => value + 1); setSelected(null); }}>◎ <span>중랑구 중심</span></button></div>
             <div className="map-body"><MapView points={visiblePoints} onSelect={selectPoint} selectedId={selected?.id} centerRequest={centerRequest} />
               <div className="filter-card"><div className="card-title">지도 표시 항목 <span className="filter-count">{visiblePoints.length}</span></div>{Object.entries(TYPES).map(([key, type]) => <label className="filter-row" key={key}><input type="checkbox" checked={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.checked }))} /><span className="legend-icon" style={{ background: type.color }}>{type.icon}</span><span>{type.label}</span></label>)}</div>
-              {selected && <div className="detail-card"><button className="close-detail" onClick={() => setSelected(null)}>×</button><span className="detail-type" style={{ color: (TYPES[selected.type] || TYPES.report).color }}>{(TYPES[selected.type] || TYPES.report).label}</span><strong>{selected.title}</strong><p>{selected.detail}</p><div className="risk-line"><span className={`risk-chip ${selected.risk === '높음' ? 'high' : ''}`}>{selected.risk || '정보'}</span><span>지도 표시 위치</span></div></div>}
+              {selected && <div className="detail-card"><button className="close-detail" onClick={() => setSelected(null)}>×</button><span className="detail-type" style={{ color: (TYPES[selected.type] || TYPES.report).color }}>{(TYPES[selected.type] || TYPES.report).label}</span><strong>{selected.title}</strong><p>{selected.detail}</p><div className="risk-line">{String(selected.id).startsWith('user-') && (
+  <button className="text-button" onClick={() => deleteReport(selected.id)}>🗑 제보 삭제</button>
+)}<span className={`risk-chip ${selected.risk === '높음' ? 'high' : ''}`}>{selected.risk || '정보'}</span><span>지도 표시 위치</span></div></div>}
             </div>
-            <div className="map-footer"><span><i className="online-dot" /> 지도 데이터 연결됨</span><span>지도 타일 © OpenStreetMap contributors</span></div>
+            <div className="map-footer"><span><i className="online-dot" /> 지도 데이터 연결됨</span><span>지도 © Kakao</span></div>
           </section>
           <section className="bottom-grid"><div className="info-card"><div className="section-title"><div><h2>최근 위험정보</h2><p>통학로에서 확인할 정보예요.</p></div><button className="text-button" onClick={() => setPage('list')}>전체 보기 →</button></div>{allPoints.slice(-3).reverse().map(point => <button className="recent-row" key={point.id} onClick={() => { setSelected(point); setPage('map'); }}><span className="recent-icon" style={{ background: (TYPES[point.type] || TYPES.report).color }}>{(TYPES[point.type] || TYPES.report).icon}</span><span className="recent-copy"><strong>{point.title}</strong><small>{point.detail}</small></span><span className="row-arrow">›</span></button>)}</div><div className="tip-card"><div className="tip-icon">💡</div><div><h2>안전한 통학 팁</h2><p>횡단보도에서는 멈춰서 좌우를 살피고, 주차된 차량 주변에서는 운전자와 눈을 맞춘 뒤 이동해요.</p><button className="text-button" onClick={() => setPage('about')}>서비스 안내 →</button></div></div></section>
         </>}
@@ -157,7 +224,7 @@ function App() {
       </main>
     </div>
     {notice && page !== 'report' && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}>×</button></div>}
-    <footer className="app-footer">현재가 미래로 <span>·</span> 중랑구 통학로 안전지도 <span>·</span> 팀 프로젝트 데모</footer>
+    <footer className="app-footer">현재가 미래로 <span>·</span> 중랑구 통학로 안전지도 <span>·</span> Kakao Maps API · 팀 프로젝트 데모</footer>
   </div>;
 }
 
