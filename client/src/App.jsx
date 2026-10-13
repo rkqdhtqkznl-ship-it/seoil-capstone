@@ -35,10 +35,10 @@ function MapView({ points, onSelect, selectedId, centerRequest }) {
   // 1) SDK 로드 + 지도 생성
   useEffect(() => {
     let cancelled = false;
-    const key = process.env.REACT_APP_KAKAO_MAP_KEY?.trim();
+    const key = import.meta.env.VITE_KAKAO_MAP_KEY?.trim();
 
     if (!key) {
-      setMapError('카카오 JavaScript 키가 설정되지 않았어요. client/.env 파일에 REACT_APP_KAKAO_MAP_KEY=키값 을 입력한 뒤 개발 서버를 다시 실행해 주세요.');
+      setMapError('카카오 JavaScript 키가 설정되지 않았어요. client/.env 파일에 VITE_KAKAO_MAP_KEY=키값 을 입력한 뒤 개발 서버를 다시 실행해 주세요.');
       return () => { cancelled = true; };
     }
 
@@ -166,11 +166,7 @@ function App() {
     setReportText(''); setReportPlace(''); setNotice('제보가 이 브라우저에 저장됐어요. 지도에서 보라색 표시를 확인하세요.');
     setSelected(newReport); setPage('map');
   };
-  const deleteReport = id => {
-    setReports(prev => prev.filter(r => r.id !== id));
-    setSelected(null);
-    setNotice('제보를 삭제했어요.');
-  };
+
   const navItems = [
     { id: 'map', icon: '⌖', label: '지도 보기' },
     { id: 'list', icon: '☷', label: '위험정보 목록' },
@@ -207,9 +203,7 @@ function App() {
             <div className="map-toolbar"><div className="searchbox"><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="학교명 또는 위험정보 검색" aria-label="지도 검색" />{query && <button onClick={() => setQuery('')} aria-label="검색 지우기">×</button>}</div><button className="locate-button" onClick={() => { setCenterRequest(value => value + 1); setSelected(null); }}>◎ <span>중랑구 중심</span></button></div>
             <div className="map-body"><MapView points={visiblePoints} onSelect={selectPoint} selectedId={selected?.id} centerRequest={centerRequest} />
               <div className="filter-card"><div className="card-title">지도 표시 항목 <span className="filter-count">{visiblePoints.length}</span></div>{Object.entries(TYPES).map(([key, type]) => <label className="filter-row" key={key}><input type="checkbox" checked={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.checked }))} /><span className="legend-icon" style={{ background: type.color }}>{type.icon}</span><span>{type.label}</span></label>)}</div>
-              {selected && <div className="detail-card"><button className="close-detail" onClick={() => setSelected(null)}>×</button><span className="detail-type" style={{ color: (TYPES[selected.type] || TYPES.report).color }}>{(TYPES[selected.type] || TYPES.report).label}</span><strong>{selected.title}</strong><p>{selected.detail}</p><div className="risk-line">{String(selected.id).startsWith('user-') && (
-  <button className="text-button" onClick={() => deleteReport(selected.id)}>🗑 제보 삭제</button>
-)}<span className={`risk-chip ${selected.risk === '높음' ? 'high' : ''}`}>{selected.risk || '정보'}</span><span>지도 표시 위치</span></div></div>}
+              {selected && <div className="detail-card"><button className="close-detail" onClick={() => setSelected(null)}>×</button><span className="detail-type" style={{ color: (TYPES[selected.type] || TYPES.report).color }}>{(TYPES[selected.type] || TYPES.report).label}</span><strong>{selected.title}</strong><p>{selected.detail}</p><div className="risk-line"><span className={`risk-chip ${selected.risk === '높음' ? 'high' : ''}`}>{selected.risk || '정보'}</span><span>지도 표시 위치</span></div></div>}
             </div>
             <div className="map-footer"><span><i className="online-dot" /> 지도 데이터 연결됨</span><span>지도 © Kakao</span></div>
           </section>
